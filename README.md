@@ -153,6 +153,26 @@ If it is:
 3.  Prevent the parent from `wait()`ing for the child to complete. Just give a
     new prompt immediately. The child will continue to run in the background.
 
+In every instance of the main loop after the user hits `RETURN`, you should wait
+in a loop to reap any background zombies that have died in the meantime. You can
+use a loop do this with without blocking like so:
+
+```c
+// Wait for any other processes that have ended in the
+// meantime. A more correct solution would be to listen for the
+// SIGCHLD signal and wait for zombies at that point.
+while (waitpid(-1, NULL, WNOHANG) > 0)
+    ;
+```
+
+The above (empty) loop will just call `waitpid()` repeatedly until there are no
+more zombies to reap. Then the program continues on.
+
+What happens if you don't do this?
+
+Mini stretch challenge: wait for the `SIGCHLD` signal and put the above `while`
+loop in there instead.
+
 Note that you might get weird output when doing this, like the prompt might
 appear before the program completes, or not at all if the program's output
 overwrites it. If it looks like it hangs at the end, just hit `RETURN` to get
