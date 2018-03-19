@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define PROMPT "lambda-shell$ "
 
@@ -64,7 +66,11 @@ int main(void)
     // How many command line args the user typed
     int args_count;
 
-    int is_background = 0;
+    int is_background;
+
+    char *file_name = NULL;
+
+    char **args_pipe;
 
     // Shell loops forever (until we tell it to exit)
     while (1)
@@ -75,6 +81,12 @@ int main(void)
 
         // Read input from keyboard
         fgets(commandline, sizeof commandline, stdin);
+
+        // Wait for any other processes that have ended in the
+        // meantime. A more correct solution would be to listen for the
+        // SIGCHLD signal and wait for zombies at that point.
+        while (waitpid(-1, NULL, WNOHANG) > 0)
+            ;
 
         // Exit the shell on End-Of-File (CRTL-D)
         if (feof(stdin))
@@ -106,49 +118,108 @@ int main(void)
         {
             printf("%d: '%s'\n", i, args[i]);
         }
-        execv(NULL, args);
-
 #endif
 
         if (strcmp(args[0], "cd") == 0)
         {
-            if (args_count == 2)
+            if (args_count != 2)
             {
-                if (chdir(args[1]) < 0)
-                {
-                    perror("chdir");
-                }
-                else
-                {
-                    continue;
-                }
+                printf("usage: cd dirname\n");
+                continue;
             }
-            else
+
+            int status = chdir(args[1]);
+            if (status == -1)
             {
-                perror("cd");
+                perror("chdir");
+                continue;
             }
+
+            // successfully change directory
+            continue;
         }
+
+        is_background = 0;
 
         if (strcmp(args[args_count - 1], "&") == 0)
         {
-            args[args_count - 1] = NULL;
             is_background = 1;
+            args[args_count - 1] = NULL;
         }
 
-        if (fork() == 0)
+        if (args_count >= 3 && strcmp(args[args_count - 2], ">") == 0)
         {
+            file_name = args[args_count - 1];
+            args[args_count - 2] = NULL;
+        }
+
+        args_pipe = NULL;
+        for (int i = 0; i < args_count; i++)
+        {
+            if (strcmp(args[i], "|") == 0)
+            {
+                args_pipe = &(args[i + 1]);
+                args[i] = NULL;
+            }
+        }
+
+        pid_t fk = fork();
+        if (fk == -1)
+        {
+            perror("fork");
+            continue;
+        }
+
+        if (fk == 0)
+        {
+            if (file_name != NULL)
+            {
+                int fd = open(file_name, O_WRONLY | O_CREAT);
+                if (fd == -1)
+                {
+                    perror("redir: open");
+                }
+                else
+                {
+                    dup2(fd, 1);
+                }
+            }
+
+            if (args_pipe != NULL)
+            {
+                int p[2];
+                pipe(p);
+
+                pid_t pipe_child = fork();
+                if (pipe_child == 0)
+                {
+                    dup2(p[0], 0);
+                    close(p[1]);
+
+                    execvp(args_pipe[0], args_pipe);
+                    perror("exec");
+                    exit(1);
+                }
+                else
+                {
+                    dup2(p[1], 1);
+                    close(p[0]);
+
+                    execvp(args[0], args);
+                    perror("exec");
+                    exit(1);
+                }
+            }
+
             execvp(args[0], args);
+            perror("execvp");
+            exit(1);
         }
         else
         {
-            if (is_background == 0)
+            if (!is_background)
             {
                 wait(NULL);
-            }
-
-            if (is_background == 1)
-            {
-                is_background = 0;
             }
         }
     }
